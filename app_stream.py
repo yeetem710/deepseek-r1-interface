@@ -53,24 +53,23 @@ def stream():
                     if line:
                         try:
                             json_response = json.loads(line)
-                            print(f"Received response chunk: {str(json_response)[:100]}...")
+                            text = json_response.get('response', '')
                             
-                            if 'response' in json_response:
-                                text = json_response['response']
-                                if text == "<think>":
-                                    in_think_block = True
-                                    yield f"data: {json.dumps({'type': 'think_start'})}\n\n"
-                                elif text == "</think>":
-                                    in_think_block = False
-                                    yield f"data: {json.dumps({'type': 'think_end'})}\n\n"
+                            if text == "<think>":
+                                in_think_block = True
+                                yield f"data: {json.dumps({'type': 'think_start'})}\n\n"
+                            elif text == "</think>":
+                                in_think_block = False
+                                yield f"data: {json.dumps({'type': 'think_end'})}\n\n"
+                            else:
+                                if in_think_block:
+                                    yield f"data: {json.dumps({'type': 'think_content', 'content': text})}\n\n"
                                 else:
-                                    if in_think_block:
-                                        # Stream thinking content immediately
-                                        yield f"data: {json.dumps({'type': 'think_content', 'content': text})}\n\n"
-                                    else:
-                                        markdown_chunk = escape_json_string(convert_markdown(text))
-                                        yield f"data: {json.dumps({'type': 'content', 'content': markdown_chunk})}\n\n"
-                                last_time = current_time
+                                    # Stream the content immediately
+                                    content = text
+                                    yield f"data: {json.dumps({'type': 'content', 'content': content})}\n\n"
+                                    
+                            last_time = current_time
                                         
                         except json.JSONDecodeError as e:
                             print(f"JSON decode error: {e}, line: {line[:100]}...")
