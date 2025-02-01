@@ -4,11 +4,70 @@ import json
 import markdown
 import html
 import time
+import sqlite3
+from datetime import datetime
 from markdown.extensions.fenced_code import FencedCodeExtension
 from markdown.extensions.tables import TableExtension
 
 app = Flask(__name__)
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
+
+def init_db():
+    conn = sqlite3.connect('chat_history.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS chats
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                  prompt TEXT,
+                  response TEXT,
+                  thinking TEXT)''')
+    conn.commit()
+    conn.close()
+
+def save_chat(prompt, response, thinking):
+    conn = sqlite3.connect('chat_history.db')
+    c = conn.cursor()
+    c.execute('INSERT INTO chats (prompt, response, thinking) VALUES (?, ?, ?)',
+              (prompt, response, thinking))
+    conn.commit()
+    conn.close()
+
+@app.route('/history', methods=['GET'])
+def get_history():
+    conn = sqlite3.connect('chat_history.db')
+    c = conn.cursor()
+    c.execute('SELECT * FROM chats ORDER BY timestamp DESC')
+    chats = c.fetchall()
+    conn.close()
+
+    chat_history = []
+    for chat in chats:
+        chat_history.append({
+            'id': chat[0],
+            'timestamp': chat[1],
+            'prompt': chat[2],
+            'response': chat[3],
+            'thinking': chat[4]
+        })
+    return jsonify(chat_history)
+
+@app.route('/delete_chat/<int:chat_id>', methods=['DELETE'])
+def delete_chat(chat_id):
+    conn = sqlite3.connect('chat_history.db')
+    c = conn.cursor()
+    c.execute('DELETE FROM chats WHERE id = ?', (chat_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'status': 'success'})
+
+@app.route('/clear_history', methods=['POST'])
+def clear_history():
+    conn = sqlite3.connect('chat_history.db')
+    c = conn.cursor()
+    c.execute('DELETE FROM chats')
+    conn.commit()
+    conn.close()
+    return jsonify({'status': 'success'})
 
 def convert_markdown(text):
     md = markdown.Markdown(extensions=['fenced_code', 'tables', 'nl2br'])
@@ -41,6 +100,8 @@ def stream():
             
             if response.status_code == 200:
                 in_think_block = False
+                thinking_content = []
+                response_content = []
                 last_time = time.time()
                 
                 for line in response.iter_lines():
@@ -54,6 +115,7 @@ def stream():
                         try:
                             json_response = json.loads(line)
                             text = json_response.get('response', '')
+                            print(f"Received chunk: {text[:50]}")
                             
                             if text == "<think>":
                                 in_think_block = True
@@ -63,11 +125,11 @@ def stream():
                                 yield f"data: {json.dumps({'type': 'think_end'})}\n\n"
                             else:
                                 if in_think_block:
+                                    thinking_content.append(text)
                                     yield f"data: {json.dumps({'type': 'think_content', 'content': text})}\n\n"
                                 else:
-                                    # Stream the content immediately
-                                    content = text
-                                    yield f"data: {json.dumps({'type': 'content', 'content': content})}\n\n"
+                                    response_content.append(text)
+                                    yield f"data: {json.dumps({'type': 'content', 'content': text})}\n\n"
                                     
                             last_time = current_time
                                         
@@ -75,6 +137,11 @@ def stream():
                             print(f"JSON decode error: {e}, line: {line[:100]}...")
                             error_msg = escape_json_string(f"Error decoding response: {str(e)}")
                             yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
+
+                # Save the chat history
+                thinking = ''.join(thinking_content)
+                response = ''.join(response_content)
+                save_chat(user_input, response, thinking)
                 
                 print("Stream completed successfully")
                 yield f"data: {json.dumps({'type': 'done'})}\n\n"
@@ -112,4 +179,5 @@ def health():
         return jsonify({"status": "error", "message": "Could not connect to Ollama server"}), 500
 
 if __name__ == '__main__':
+    init_db()
     app.run(debug=True)

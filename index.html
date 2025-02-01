@@ -86,13 +86,45 @@
             display: none;
             margin-left: 1rem;
         }
+
+        .chat-history {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .chat-item {
+            margin-bottom: 1rem;
+            padding: 1rem;
+            border: 1px solid #495057;
+            border-radius: 0.25rem;
+        }
+
+        .chat-item .timestamp {
+            font-size: 0.875rem;
+            color: #6c757d;
+        }
+
+        .chat-item .prompt {
+            margin: 0.5rem 0;
+            font-weight: bold;
+        }
+
+        .chat-buttons {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+        }
+
+        .history-controls {
+            margin-bottom: 1rem;
+        }
     </style>
 </head>
 <body>
     <div class="container mt-5">
         <h1 class="mb-4">Ollama DeepSeek R1 Interface</h1>
         
-        <div class="card">
+        <div class="card mb-4">
             <div class="card-body">
                 <form id="promptForm">
                     <div class="mb-3">
@@ -112,11 +144,22 @@
             </div>
         </div>
 
-        <div class="card mt-4" id="responseCard" style="display: none;">
+        <div class="card mb-4" id="responseCard" style="display: none;">
             <div class="card-header">
                 Response
             </div>
             <div class="card-body" id="responseContent">
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>Chat History</span>
+                <div class="history-controls">
+                    <button class="btn btn-danger btn-sm" onclick="clearHistory()">Clear History</button>
+                </div>
+            </div>
+            <div class="card-body chat-history" id="chatHistory">
             </div>
         </div>
     </div>
@@ -130,6 +173,59 @@
         let keepaliveTimeout = null;
         let responseBuffer = '';
         let thinkingBuffer = '';
+
+        document.addEventListener('DOMContentLoaded', function() {
+            loadChatHistory();
+        });
+
+        function loadChatHistory() {
+            fetch('/history')
+                .then(response => response.json())
+                .then(chats => {
+                    const chatHistory = document.getElementById('chatHistory');
+                    chatHistory.innerHTML = '';
+                    
+                    chats.forEach(chat => {
+                        const chatItem = document.createElement('div');
+                        chatItem.className = 'chat-item';
+                        chatItem.innerHTML = `
+                            <div class="timestamp">${new Date(chat.timestamp).toLocaleString()}</div>
+                            <div class="prompt">Prompt: ${chat.prompt}</div>
+                            ${chat.thinking ? `<div class="thinking-block">Thinking: ${chat.thinking}</div>` : ''}
+                            <div class="response-block">${marked.parse(chat.response)}</div>
+                            <div class="chat-buttons">
+                                <button class="btn btn-sm btn-outline-danger" onclick="deleteChat(${chat.id})">Delete</button>
+                                <button class="btn btn-sm btn-outline-primary" onclick="usePrompt('${chat.prompt.replace(/'/g, "\\'")}')">Use Prompt</button>
+                            </div>
+                        `;
+                        chatHistory.appendChild(chatItem);
+                    });
+                    
+                    Prism.highlightAll();
+                    addCopyButtons();
+                })
+                .catch(error => console.error('Error loading chat history:', error));
+        }
+
+        function clearHistory() {
+            if (confirm('Are you sure you want to clear all chat history?')) {
+                fetch('/clear_history', { method: 'POST' })
+                    .then(response => response.json())
+                    .then(() => loadChatHistory())
+                    .catch(error => console.error('Error clearing history:', error));
+            }
+        }
+
+        function deleteChat(chatId) {
+            fetch(`/delete_chat/${chatId}`, { method: 'DELETE' })
+                .then(response => response.json())
+                .then(() => loadChatHistory())
+                .catch(error => console.error('Error deleting chat:', error));
+        }
+
+        function usePrompt(prompt) {
+            document.getElementById('user_input').value = prompt;
+        }
 
         function addCopyButtons() {
             document.querySelectorAll('pre').forEach(function(block) {
@@ -291,6 +387,7 @@
                                     case 'done':
                                         updateStatus('Complete');
                                         console.log('Stream finished successfully');
+                                        loadChatHistory();  // Reload chat history after completion
                                         break;
                                 }
                             } catch (error) {
